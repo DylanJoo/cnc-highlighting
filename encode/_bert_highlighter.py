@@ -108,8 +108,7 @@ class BertForHighlightPrediction(BertPreTrainedModel):
                text_ref: Optional[List] = None,
                device: str = 'cpu',
                pretokenized: bool = True,
-               return_reference: bool = False
-               return_tokens: bool = False
+               return_reference: bool = False,
         ):
 
         if text_ref is None:
