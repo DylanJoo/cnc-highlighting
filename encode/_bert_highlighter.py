@@ -108,6 +108,7 @@ class BertForHighlightPrediction(BertPreTrainedModel):
                text_ref: Optional[List] = None,
                device: str = 'cpu',
                pretokenized: bool = True,
+               return_reference: bool = False
                return_tokens: bool = False
         ):
 
@@ -147,18 +148,17 @@ class BertForHighlightPrediction(BertPreTrainedModel):
             word_ids_ref = word_ids[:sep]
             word_ids_tgt = word_ids[sep:]
 
-            word_probs_ref = self._pool_probs(token_probs_ref, word_ids_ref)
-            word_probs_tgt = self._pool_probs(token_probs_tgt, word_ids_tgt)
+            ret = {'words_tgt': text_tgt[i], 
+                   'word_probs_tgt': self._pool_probs(
+                       token_probs_tgt, word_ids_tgt
+                    )}
 
-            ret = {'words_ref': text_ref[i],
-                    'words_tgt': text_tgt[i],
-                    'word_probs_ref': word_probs_ref,
-                    'word_probs_tgt': word_probs_tgt}
-
-            if return_tokens:
+            if return_reference:
                 ret.update({
-                    'token_probs_ref': token_probs_ref,
-                    'token_probs_tgt': token_probs_tgt,
+                    'words_ref': text_ref[i],
+                    'word_probs_ref': self._pool_probs(
+                        token_probs_ref, word_ids_ref
+                    )
                 })
 
             outputs.append(ret)
