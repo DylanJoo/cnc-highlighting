@@ -12,17 +12,19 @@ https://github.com/huggingface/transformers/blob/v4.35.2/src/transformers/pipeli
 """
 import torch
 import torch.nn as nn
+import numpy as np
 from typing import Optional, List
 from torch.nn import CrossEntropyLoss
 from transformers.modeling_outputs import TokenClassifierOutput
 from transformers import BertModel, BertPreTrainedModel
+from transformers import AutoTokenizer
 
 class BertForHighlightPrediction(BertPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
 
     def __init__(self, config, **model_kwargs):
         super().__init__(config)
-        self.model_args = model_kargs["model_args"]
+        # self.model_args = model_kwargs.pop("model_args", None)
         self.num_labels = config.num_labels
         self.bert = BertModel(config, add_pooling_layer=False)
         classifier_dropout = (
@@ -37,9 +39,11 @@ class BertForHighlightPrediction(BertPreTrainedModel):
         self.tau = model_kwargs.pop('tau', 1)
         self.gamma = model_kwargs.pop('gamma', 1)
         self.soft_labeling = model_kwargs.pop('soft_labeling', False)
+        self.pooling = model_kwargs.pop('pooling', 'max')
 
         ## inference
-        self.tokenizer = model_kwargs.pop('tokenizer', None)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config._name_or_path)
+
 
         self.init_weights()
 
@@ -90,17 +94,27 @@ class BertForHighlightPrediction(BertPreTrainedModel):
                 attentions=outputs.attentions
         )
 
+    def _pool_probs(self, probs, word_ids):
+        ret = np.zeros(1+max(word_ids))
+        for w_id, p in zip(word_ids, probs):
+            if self.pooling == 'max':
+                ret[w_id] = np.max([ret[w_id], p])
+            if self.pooling == 'mean':
+                ret[w_id] = np.mean([ret[w_id], p])
+        return ret
+
     def encode(self, 
                text_tgt: List[str], 
                text_ref: Optional[List] = None,
                device: str = 'cpu',
-               pretokenized: bool = True
+               pretokenized: bool = True,
+               return_tokens: bool = False
         ):
 
         if text_ref is None:
             text_ref = [self.tokenizer.pad_token] * len(text_tgt)
 
-        if pretokenized:
+        if pretokenized is False:
             text_tgt = [t.split() for t in text_tgt]
             text_ref = [t.split() for t in text_ref]
 
@@ -116,7 +130,8 @@ class BertForHighlightPrediction(BertPreTrainedModel):
         # encode
         with torch.no_grad():
             logits = self.forward(**input_tokenized).logits
-            batch_probs = self.softmax(logits).detach().cpu()
+            batch_probs = self.softmax(logits)[:, :, 1].detach().cpu()
+            batch_probs = batch_probs.numpy()
             # preds = torch.argmax(probs, dim=-1)
 
         # word importance
@@ -132,13 +147,21 @@ class BertForHighlightPrediction(BertPreTrainedModel):
             word_ids_ref = word_ids[:sep]
             word_ids_tgt = word_ids[sep:]
 
-            outputs.append({
-                'words_ref': text_ref[i],
-                'words_tgt': text_tgt[i],
-                'tokens_prob_ref': token_probs_ref,
-                'tokens_prob_tgt': token_probs_tgt,
-                'word_ids_ref': word_ids_ref,
-                'word_ids_tgt': word_ids_tgt,
-            })
+            word_probs_ref = self._pool_probs(token_probs_ref, word_ids_ref)
+            word_probs_tgt = self._pool_probs(token_probs_tgt, word_ids_tgt)
+
+            ret = {'words_ref': text_ref[i],
+                    'words_tgt': text_tgt[i],
+                    'word_probs_ref': word_probs_ref,
+                    'word_probs_tgt': word_probs_tgt}
+
+            if return_tokens:
+                ret.update({
+                    'token_probs_ref': token_probs_ref,
+                    'token_probs_tgt': token_probs_tgt,
+                })
+
+            outputs.append(ret)
+
 
         return outputs
